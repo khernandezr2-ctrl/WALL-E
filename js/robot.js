@@ -1,7 +1,7 @@
 (function () {
 'use strict';
 /* ===== Imágenes (con dibujo de respaldo si falta alguna) ===== */
-const IMG = {puerta:'puerta.jpg', pieza:'piesa.jpg', base:'Base.jpg', pared:'Pared.jpg', caja:'caja.jpg', bandera:'bandera.jpg', bateria:'Bateria.jpg'};
+const IMG = {puerta:'puerta.jpg', pieza:'piesa.png', base:'Base.jpg', pared:'Pared.jpg', caja:'caja.jpg', bandera:'bandera.jpg', bateria:'Bateria.jpg'};
 const SYM = {puerta:'i-dclosed', pieza:'i-gear', base:'i-base', pared:'i-wall', caja:'i-box', bandera:'i-flag', bateria:'i-bat', suciedad:'i-dirt', robot:'i-robot'};
 const svg = k => `<svg class="ic" viewBox="0 0 40 40"><use href="#${SYM[k]}"/></svg>`;
 window.__fb = k => { const s = document.createElement('span'); s.innerHTML = svg(k); return s.firstChild; };
