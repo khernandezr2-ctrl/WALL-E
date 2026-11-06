@@ -192,7 +192,7 @@ function initBot() {
   const bot = $('.bot');
   bot.className = 'bot';
   bot.innerHTML = svg('robot', 'rb-fb') +
-    `<model-viewer src="img/Robot.glb" alt="" camera-orbit="${ROBOT_ORBIT}" min-camera-orbit="auto 80deg auto" max-camera-orbit="auto 80deg auto" ` +
+    `<model-viewer src="img/piesa.png" alt="" camera-orbit="${ROBOT_ORBIT}" min-camera-orbit="auto 80deg auto" max-camera-orbit="auto 80deg auto" ` +
     `disable-zoom disable-pan interaction-prompt="none" shadow-intensity="1" exposure="1.1" loading="eager"></model-viewer><span class="carry" hidden></span>`;
   const mv = bot.querySelector('model-viewer');
   mv.addEventListener('load', () => bot.classList.add('has3d'));
