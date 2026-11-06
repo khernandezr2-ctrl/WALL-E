@@ -3,7 +3,7 @@
 /* ===== Imágenes (con dibujo de respaldo si falta alguna) ===== */
 const IMG = {puerta:'puerta.jpg', pieza:'piesa.png', base:'Base.jpg', pared:'Pared.jpg', caja:'caja.jpg', bandera:'bandera.jpg', bateria:'Bateria.jpg'};
 const SYM = {puerta:'i-dclosed', pieza:'i-gear', base:'i-base', pared:'i-wall', caja:'i-box', bandera:'i-flag', bateria:'i-bat', suciedad:'i-dirt', robot:'i-robot'};
-const svg = k => `<svg class="ic" viewBox="0 0 40 40"><use href="#${SYM[k]}"/></svg>`;
+const svg = (k, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 40 40"><use href="#${SYM[k]}"/></svg>`;
 window.__fb = k => { const s = document.createElement('span'); s.innerHTML = svg(k); return s.firstChild; };
 const img = k => IMG[k] ? `<img class="ic" src="img/${IMG[k]}" alt="" onerror="this.replaceWith(__fb('${k}'))">` : svg(k);
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -162,7 +162,12 @@ const BLOCKS = ['detectar_objeto()','avanzar_hacia_objeto()','abrir_objeto()','r
 /* ===== Interfaz ===== */
 const root = document.getElementById('juegoApp');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-let qi = 0, score = 0, tries = 0, busy = false, prog = [];
+/* Ángulo de cámara del robot 3D dentro del juego (el robot avanza hacia la derecha).
+   Si lo ves mirando hacia la izquierda o de espaldas, cambia el primer valor (prueba 60deg o 90deg). */
+const ROBOT_ORBIT = '-60deg 80deg auto';
+let qi = 0, busy = false, prog = [], hist = [];
+let st = {};                       // estado de la pregunta actual
+const $ = s => root.querySelector(s);
 
 function drawTrack(fr) {
   return [...Array(9).keys()].map(i => {
@@ -173,69 +178,121 @@ function drawTrack(fr) {
   }).join('');
 }
 function draw(fr, label) {
-  const lane = root.querySelector('.lane'), bot = lane.querySelector('.bot'), st = root.querySelector('#status');
-  lane.querySelector('.track').innerHTML = drawTrack(fr);
+  const bot = $('.bot'), carry = $('.carry'), msg = $('#status');
+  $('.track').innerHTML = drawTrack(fr);
   bot.style.left = (fr.x * 100 / 9) + '%';
-  bot.classList.toggle('err', !!fr.err);
-  bot.innerHTML = svg('robot') + (fr.bag ? `<span class="carry">${img('pieza')}</span>` : '');
-  st.className = 'status' + (fr.err ? ' err' : '');
-  st.textContent = fr.msg ? (label ? label + ': ' : '') + (fr.err ? '❌ ' : '🤖 El robot ') + fr.msg : (label ? label + ': listo' : 'Robot listo.');
+  bot.classList.toggle('warn', !!fr.err);
+  const on = fr.bag ? '1' : '';
+  if (carry.dataset.on !== on) { carry.dataset.on = on; carry.hidden = !on; carry.innerHTML = on ? img('pieza') : ''; }
+  msg.className = 'status' + (fr.err ? ' warn' : '');
+  msg.textContent = fr.msg ? (label ? label + ': ' : '') + (fr.err ? '⚠️ ' : '🤖 El robot ') + fr.msg : (label ? label + ': listo' : 'Robot listo.');
+}
+/* El robot: dibujo de respaldo debajo y modelo 3D encima. El dibujo se oculta cuando el 3D carga. */
+function initBot() {
+  const bot = $('.bot');
+  bot.className = 'bot';
+  bot.innerHTML = svg('robot', 'rb-fb') +
+    `<model-viewer src="img/Robot.glb" alt="" camera-orbit="${ROBOT_ORBIT}" min-camera-orbit="auto 80deg auto" max-camera-orbit="auto 80deg auto" ` +
+    `disable-zoom disable-pan interaction-prompt="none" shadow-intensity="1" exposure="1.1" loading="eager"></model-viewer><span class="carry" hidden></span>`;
+  const mv = bot.querySelector('model-viewer');
+  mv.addEventListener('load', () => bot.classList.add('has3d'));
+  mv.addEventListener('error', () => mv.remove());
 }
 function stageHTML() {
   return `<div class="stage"><div class="lane"><div class="track"></div><div class="bot"></div></div></div><p class="status" id="status" role="status" aria-live="polite"></p>`;
 }
+function updateCnt() { $('#cnt').textContent = 'Pruebas: ' + st.runs + ' · Intentos: ' + st.tries; }
+function setCheck() { const c = $('#check'); if (c) c.disabled = busy || st.done || !st.res; }
+function clearVerdict() {
+  root.querySelectorAll('.opt').forEach(o => o.classList.remove('sel', 'bad', 'good'));
+  const p = $('#prog'); if (p) p.classList.remove('bad', 'good');
+  $('#fb').innerHTML = '';
+}
+
+/* Ejecuta el programa en todos los escenarios SIN decir si está bien o mal: solo guarda el resultado. */
 async function execute(code) {
-  if (busy) return false;
-  busy = true; tries++;
-  const q = Q[qi], segs = [];
-  for (const sc of q.s) { const r = runSc(code, sc); segs.push(r); if (!r.good) break; }
+  busy = true; st.runs++; updateCnt(); setCheck();
+  const q = Q[qi], segs = q.s.map(sc => runSc(code, sc));
   for (const s of segs) {
     for (const fr of s.w.fr) { draw(fr, s.lab); await sleep(fr.msg ? 650 : 300); }
     await sleep(350);
   }
+  const bad = segs.find(s => !s.good), errSeg = segs.find(s => s.err);
+  st.res = {good: !bad, why: bad ? (bad.lab ? bad.lab + ': ' : '') + (bad.err ? 'el programa se detuvo con un error en la ' + bad.err : 'el programa terminó sin errores, pero ' + q.why) : ''};
   busy = false;
-  const last = segs[segs.length - 1], good = segs.every(s => s.good);
-  const st = root.querySelector('#status');
-  st.className = 'status ' + (good ? 'ok' : 'err');
-  st.textContent = good ? '✅ ¡Correcto! El robot cumplió la misión.' : (last.err ? '❌ Error en la ' + last.err + '. ' : '❌ ') + (last.err ? '' : 'Sin errores, pero ' + q.why);
-  return good;
+  const msg = $('#status');
+  msg.className = 'status' + (errSeg ? ' warn' : '');
+  msg.textContent = (errSeg ? '⚠️ ' + (errSeg.lab ? errSeg.lab + ': ' : '') + 'Error en la ' + errSeg.err + ' (el programa se detuvo). ' : '') +
+    'Observa lo que hizo el robot. Cuando lo decidas, pulsa «Ver respuesta».';
+  setCheck();
 }
-function success() {
-  const q = Q[qi]; if (tries === 1) score++;
-  root.querySelector('#fb').innerHTML = `<div class="idea-box"><strong>Idea clave.</strong> ${q.idea}</div><p><button class="btn" id="next" type="button">${qi === 9 ? 'Ver resultado' : 'Siguiente pregunta'}</button></p>`;
-  root.querySelector('#next').onclick = () => { qi++; qi < 10 ? show() : final(); };
-  root.querySelector('#next').focus();
+
+function resetAttempt() {
+  clearVerdict(); st.res = null; st.sel = null;
+  draw(mkWorld(Q[qi].s[0]).fr[0]); setCheck();
+}
+/* «Ver respuesta»: recién aquí se califica la opción que se probó. */
+function verify() {
+  const q = Q[qi], res = st.res;
+  if (busy || st.done || !res) return;
+  st.tries++; updateCnt();
+  const target = q.build ? $('#prog') : root.querySelector(`.opt[data-i="${st.sel}"]`);
+  target.classList.remove('sel');
+  const msg = $('#status'); msg.className = 'status'; msg.textContent = '';
+  const fb = $('#fb');
+  if (res.good) {
+    st.done = true; target.classList.add('good');
+    root.querySelectorAll('.opt,[data-b],#undo,#clr,#run').forEach(o => o.disabled = true);
+    hist.push({t: q.t, tries: st.tries, runs: st.runs});
+    fb.innerHTML = `<div class="verdict good"><strong>✅ ¡Correcto!</strong> El robot cumplió la misión. Lo lograste en ${st.tries} ${st.tries === 1 ? 'intento' : 'intentos'}.</div>` +
+      `<div class="idea-box"><strong>Idea clave.</strong> ${q.idea}</div><p><button class="btn" id="next" type="button">${qi === 9 ? 'Ver resultado' : 'Siguiente pregunta'}</button></p>`;
+    $('#next').onclick = () => { qi++; qi < 10 ? show() : final(); };
+    $('#next').focus();
+  } else {
+    target.classList.add('bad'); st.res = null;
+    fb.innerHTML = `<div class="verdict bad"><strong>❌ Esta opción no es la correcta.</strong> Fíjate: ${res.why}</div><p><button class="btn" id="retry" type="button">Volver a intentar</button></p>`;
+    $('#retry').onclick = resetAttempt;
+    $('#retry').focus();
+  }
+  setCheck();
 }
 function show() {
-  const q = Q[qi]; tries = 0; prog = [];
-  const head = `<div class="qhead"><span>Pregunta ${qi + 1} de 10</span><span>Aciertos a la primera: ${score}</span></div><div class="bar"><i style="width:${qi * 10}%"></i></div><h3>${qi + 1}. ${q.t}</h3><p class="mission"><strong>Misión:</strong> ${q.m}</p>` + stageHTML();
+  const q = Q[qi]; prog = [];
+  st = {sel: null, res: null, runs: 0, tries: 0, done: false};
+  const head = `<div class="qhead"><span>Pregunta ${qi + 1} de 10</span><span>Aciertos a la primera: ${hist.filter(h => h.tries === 1).length}</span><span id="cnt"></span></div><div class="bar"><i style="width:${qi * 10}%"></i></div><h3>${qi + 1}. ${q.t}</h3><p class="mission"><strong>Misión:</strong> ${q.m}</p>` + stageHTML();
+  const check = `<button class="btn" id="check" type="button" disabled>Ver respuesta</button>`;
   if (!q.build) {
-    root.innerHTML = head + `<div class="opts">${q.o.map((c, i) => `<button class="opt" data-i="${i}" type="button"><b>${'ABCD'[i]}</b><pre class="code">${hl(c)}</pre></button>`).join('')}</div><div id="fb"></div>`;
-    draw(mkWorld(q.s[0]).fr[0]);
+    root.innerHTML = head + `<div class="opts">${q.o.map((c, i) => `<button class="opt" data-i="${i}" type="button"><b>${'ABCD'[i]}</b><pre class="code">${hl(c)}</pre></button>`).join('')}</div><div class="actions">${check}</div><div id="fb" aria-live="polite"></div>`;
     root.querySelectorAll('.opt').forEach(b => b.onclick = async () => {
-      if (busy) return;
-      root.querySelectorAll('.opt').forEach(o => o.classList.remove('sel'));
-      const i = +b.dataset.i, good = await execute(q.o[i]);
-      if (good) { root.querySelectorAll('.opt').forEach(o => o.disabled = true); b.classList.add('good'); success(); }
-      else b.classList.add('bad');
+      if (busy || st.done) return;
+      clearVerdict(); st.res = null; st.sel = +b.dataset.i; b.classList.add('sel');
+      await execute(q.o[st.sel]);
     });
   } else {
-    root.innerHTML = head + `<div class="palette">${BLOCKS.map(b => `<button class="btn ghost" type="button" data-b="${b}">${b}</button>`).join('')}</div><pre class="code prog" id="prog"></pre><p class="palette"><button class="btn" id="run" type="button">▶ Ejecutar</button><button class="btn ghost" id="undo" type="button">Quitar último</button><button class="btn ghost" id="clr" type="button">Borrar todo</button></p><div id="fb"></div>`;
-    draw(mkWorld(q.s[0]).fr[0]);
-    const paint = () => root.querySelector('#prog').innerHTML = prog.length ? prog.map((b, i) => `<span class="cm">${i + 1}</span>  ${b}`).join('\n') : '<span class="cm"># Toca un bloque para agregarlo aquí</span>';
+    root.innerHTML = head + `<div class="palette">${BLOCKS.map(b => `<button class="btn ghost" type="button" data-b="${b}">${b}</button>`).join('')}</div><pre class="code prog" id="prog"></pre><div class="actions"><button class="btn" id="run" type="button">▶ Ejecutar</button><button class="btn ghost" id="undo" type="button">Quitar último</button><button class="btn ghost" id="clr" type="button">Borrar todo</button>${check}</div><div id="fb" aria-live="polite"></div>`;
+    const paint = () => $('#prog').innerHTML = prog.length ? prog.map((b, i) => `<span class="cm">${i + 1}</span>  ${b}`).join('\n') : '<span class="cm"># Toca un bloque para agregarlo aquí</span>';
+    const changed = () => { clearVerdict(); st.res = null; paint(); setCheck(); };
     paint();
-    root.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { if (!busy) { prog.push(b.dataset.b); paint(); } });
-    root.querySelector('#undo').onclick = () => { if (!busy) { prog.pop(); paint(); } };
-    root.querySelector('#clr').onclick = () => { if (!busy) { prog = []; paint(); } };
-    root.querySelector('#run').onclick = async () => {
-      if (busy || !prog.length) return;
-      if (await execute(prog.join('\n'))) { root.querySelector('#run').disabled = true; success(); }
+    root.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { if (!busy && !st.done) { prog.push(b.dataset.b); changed(); } });
+    $('#undo').onclick = () => { if (!busy && !st.done) { prog.pop(); changed(); } };
+    $('#clr').onclick = () => { if (!busy && !st.done) { prog = []; changed(); } };
+    $('#run').onclick = async () => {
+      if (busy || st.done || !prog.length) return;
+      clearVerdict(); st.res = null;
+      await execute(prog.join('\n'));
     };
   }
+  initBot(); updateCnt();
+  draw(mkWorld(q.s[0]).fr[0]);
+  $('#check').onclick = verify;
 }
 function final() {
-  root.innerHTML = `<div class="final"><h3>¡Terminaste!</h3><strong>${score} / 10</strong><p>respuestas correctas a la primera. ${score >= 8 ? 'Piensas como un programador.' : 'Repite las que fallaste: depurar también es aprender.'}</p><button class="btn" id="again" type="button">Jugar de nuevo</button></div>`;
-  root.querySelector('#again').onclick = () => { qi = 0; score = 0; show(); };
+  const first = hist.filter(h => h.tries === 1).length, total = hist.reduce((a, h) => a + h.tries, 0);
+  root.innerHTML = `<div class="final"><h3>¡Terminaste!</h3><strong>${first} / 10</strong><p>respuestas correctas a la primera. ${first >= 8 ? 'Piensas como un programador.' : 'Repite las que te costaron: depurar también es aprender.'}</p>` +
+    `<table class="res"><thead><tr><th>Pregunta</th><th>Pruebas</th><th>Intentos</th></tr></thead><tbody>${hist.map((h, i) => `<tr><td>${i + 1}. ${h.t}</td><td>${h.runs}</td><td>${h.tries}</td></tr>`).join('')}</tbody>` +
+    `<tfoot><tr><td>Total</td><td>${hist.reduce((a, h) => a + h.runs, 0)}</td><td>${total}</td></tr></tfoot></table>` +
+    `<button class="btn" id="again" type="button">Jugar de nuevo</button></div>`;
+  $('#again').onclick = () => { qi = 0; hist = []; show(); };
 }
 
 /* ===== Portada ===== */
